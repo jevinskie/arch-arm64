@@ -51,7 +51,14 @@ enum ArrangementSpec
 	ARRSPEC_1HALF = 13, /* (.h) one 16-bit half-precision: REG_V0_H0 */
 
 	/* low 8-bit of v-reg considered as... */
-	ARRSPEC_1BYTE = 14, /* (.b) one 8-bit byte: REG_V0_B0 */
+	ARRSPEC_1BYTE = 14 /* (.b) one 8-bit byte: REG_V0_B0 */
+};
+
+enum SliceIndicator
+{
+	SLICE_NONE = -1,
+	SLICE_HORIZONTAL = 0, /* same values as read from fields32 */
+	SLICE_VERTICAL = 1
 };
 
 //-----------------------------------------------------------------------------
@@ -153,7 +160,7 @@ typedef struct context_
 	uint64_t Pd, Pdm, Pdn, Pg, Pm, Pn, Pt;
 	uint64_t Q, Qa, Qd, Qm, Qn, Qt, Qt2;
 	uint64_t reason, retry;
-	uint64_t R, Ra, Rd, Rdn, Rm, Rmhi, Rn, Rs, Rt, Rt2;
+	uint64_t R, Ra, Rd, Rdn, Rm, Rmhi, Rn, Rs, Rt, Rt2, Rv;
 	uint64_t s1, s2, sel1, sel2, S, Sa, Sd, Sm, Sn, St, St2;
 	uint64_t S10;
 	uint64_t SCTLR_EL1_UMA;
@@ -170,6 +177,7 @@ typedef struct context_
 	uint64_t acc;
 	uint64_t acctype;
 	uint64_t accumulate;
+	uint64_t alias;
 	uint64_t amount;
 	uint64_t and_test;
 	uint64_t asimdimm;
@@ -382,6 +390,7 @@ typedef struct context_
 	uint64_t tszh;
 	uint64_t tszl;
 	uint64_t types;
+	uint64_t u0, u1;
 	uint64_t uimm4;
 	uint64_t uimm6;
 	uint64_t unpriv_at_el1;
@@ -390,12 +399,13 @@ typedef struct context_
 	uint64_t unsigned_;
 	uint64_t use_key_a;
 	uint64_t user_access_override;
+	uint64_t v, vertical;
 	uint64_t wback;
 	uint64_t wb_unknown;
 	uint64_t wmask;
 	uint64_t writeback;
 	uint64_t xs;
-	uint64_t Zk, zero_data;
+	uint64_t ZAda, ZAd, ZAn, ZAt, Zk, zero_data;
 
 } context;
 
@@ -404,24 +414,27 @@ typedef struct context_
 //-----------------------------------------------------------------------------
 
 enum OperandClass
-{
-	NONE = 0,
-	IMM32,
-	IMM64,
-	FIMM32,
-	STR_IMM,
-	REG,
-	MULTI_REG,
-	SYS_REG,
-	MEM_REG,
-	MEM_PRE_IDX,
-	MEM_POST_IDX,
-	MEM_OFFSET,
-	MEM_EXTENDED,
-	LABEL,
-	CONDITION,
-	NAME,
-	IMPLEMENTATION_SPECIFIC
+{                          // syntax                      example
+	NONE = 0,              // --------------------------- ---------------------
+	IMM32 = 1,
+	IMM64 = 2,
+	FIMM32 = 3,
+	STR_IMM = 4,
+	REG = 5,
+	MULTI_REG = 6,
+	SYS_REG = 7,
+	MEM_REG = 8,
+	MEM_PRE_IDX = 9,
+	MEM_POST_IDX = 10,
+	MEM_OFFSET = 11,
+	MEM_EXTENDED = 12,
+	SME_TILE = 13,
+	INDEXED_ELEMENT = 14,        // <Pn>.<T>[<Wm>{, #<imm>}]    p12.d[w15, #15]
+	ACCUM_ARRAY = 15,			// ZA[<Wv>, #<imm>]            ZA[w13, #8]
+	LABEL = 16,
+	CONDITION = 17,
+	NAME = 18,
+	IMPLEMENTATION_SPECIFIC = 19
 };
 
 enum Condition
@@ -476,6 +489,14 @@ enum Group
 	END_GROUP
 };
 
+enum FlagEffect
+{
+	FLAGEFFECT_NONE=0, // doesn't set flags
+	FLAGEFFECT_SETS=1, // sets flags, but unknown which type
+	FLAGEFFECT_SETS_NORMAL=2, // sets flags after normal comparison
+	FLAGEFFECT_SETS_FLOAT=3 // sets flags after float comparison
+};
+
 #ifndef __cplusplus
 typedef enum SystemReg SystemReg;
 typedef enum OperandClass OperandClass;
@@ -485,6 +506,7 @@ typedef enum ShiftType ShiftType;
 typedef enum Operation Operation;
 typedef enum Group Group;
 typedef enum ArrangementSpec ArrangementSpec;
+typedef enum SliceIndicator SliceIndicator;
 #endif
 
 #define MAX_REGISTERS 5
@@ -513,8 +535,12 @@ struct InstructionOperand
 	uint32_t shiftValue;
 	ShiftType extend;
 	bool signedImm;
-	char pred_qual;  // predicate register qualifier ('z' or 'm')
-	bool mul_vl;     // whether MEM_OFFSET has the offset "mul vl"
+	char pred_qual;			// predicate register qualifier ('z' or 'm')
+	bool mul_vl;			// whether MEM_OFFSET has the offset "mul vl"
+
+	/* for class SME_TILE */
+	uint16_t tile;
+	SliceIndicator slice;
 
 	/* for class NAME */
 	char name[MAX_NAME];
@@ -534,7 +560,7 @@ struct Instruction
 	enum Operation operation;
 	InstructionOperand operands[MAX_OPERANDS];
 
-	bool setflags;
+	enum FlagEffect setflags;
 };
 
 #ifndef __cplusplus

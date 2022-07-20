@@ -396,6 +396,9 @@ class Arm64Architecture : public Architecture
 		case ARM64_SMC:
 			result.AddBranch(SystemCall);
 			break;
+		case ARM64_UDF:
+			result.AddBranch(ExceptionBranch);
+			break;
 
 		default:
 			break;
@@ -702,11 +705,25 @@ class Arm64Architecture : public Architecture
 		char *instrBytes = NULL, *err = NULL;
 		int instrBytesLen = 0, errLen = 0;
 
+		string prepend = ".arch_extension crc\n" ".arch_extension sm4\n"
+			".arch_extension sha3\n" ".arch_extension sha2\n" ".arch_extension aes\n"
+			".arch_extension crypto\n" ".arch_extension fp\n" ".arch_extension simd\n"
+			".arch_extension ras\n" ".arch_extension lse\n" ".arch_extension predres\n"
+			".arch_extension ccdp\n" ".arch_extension mte\n" ".arch_extension memtag\n"
+			".arch_extension tlb-rmi\n" ".arch_extension pan\n" ".arch_extension pan-rwv\n"
+			".arch_extension ccpp\n" ".arch_extension rcpc\n" ".arch_extension rng\n"
+			".arch_extension sve\n" ".arch_extension sve2\n" ".arch_extension sve2-aes\n"
+			".arch_extension sve2-sm4\n" ".arch_extension sve2-sha3\n" ".arch_extension sve2-bitperm\n"
+			".arch_extension ls64\n" ".arch_extension xs\n" ".arch_extension pauth\n"
+			".arch_extension flagm\n" ".arch_extension rme\n" ".arch_extension sme\n"
+			".arch_extension sme-f64\n" ".arch_extension sme-i64\n" ".arch_extension hbc\n"
+			".arch_extension mops\n";
+
 		BNLlvmServicesInit();
 
 		errors.clear();
 		assembleResult =
-		    BNLlvmServicesAssemble(code.c_str(), LLVM_SVCS_DIALECT_UNSPEC, "aarch64-none-none",
+		    BNLlvmServicesAssemble((prepend + code).c_str(), LLVM_SVCS_DIALECT_UNSPEC, "aarch64-none-none",
 		        LLVM_SVCS_CM_DEFAULT, LLVM_SVCS_RM_STATIC, &instrBytes, &instrBytesLen, &err, &errLen);
 
 		if (assembleResult || errLen)
@@ -770,6 +787,8 @@ class Arm64Architecture : public Architecture
 			if (instr.operands[i].operandClass == NONE)
 				return true;
 
+			struct InstructionOperand *operand = &(instr.operands[i]);
+
 			if (i != 0)
 				result.emplace_back(OperandSeparatorToken, ", ");
 
@@ -812,6 +831,57 @@ class Arm64Architecture : public Architecture
 				result.emplace_back(IntegerToken, buf);
 				tokenizeSuccess = true;
 				break;
+			case ACCUM_ARRAY: /* eg: "za[w12, #0x6]" */
+				result.emplace_back(TextToken, "ZA");
+				result.emplace_back(TextToken, "[");
+				snprintf(buf, sizeof(buf), "%s", get_register_name(operand->reg[0]));
+				result.emplace_back(RegisterToken, buf);
+				result.emplace_back(OperandSeparatorToken, ", ");
+				result.emplace_back(TextToken, " #");
+				snprintf(buf, sizeof(buf), "0x%" PRIx64, operand->immediate);
+				result.emplace_back(IntegerToken, buf);
+				result.emplace_back(TextToken, "]");
+				tokenizeSuccess = true;
+				break;
+			case SME_TILE: /* eg: "z0v.b[w12, #0xb]" */
+				snprintf(buf, sizeof(buf), "Z%d", operand->tile);
+				result.emplace_back(TextToken, buf);
+				if (operand->slice == SLICE_HORIZONTAL)
+					result.emplace_back(TextToken, "h");
+				else if (operand->slice == SLICE_VERTICAL)
+					result.emplace_back(TextToken, "v");
+				result.emplace_back(TextToken, get_arrspec_str_truncated(operand->arrSpec));
+				if (operand->reg[0] != REG_NONE)
+				{
+					result.emplace_back(TextToken, "[");
+					snprintf(buf, sizeof(buf), "%s", get_register_name(operand->reg[0]));
+					result.emplace_back(RegisterToken, buf);
+					if (operand->arrSpec != ARRSPEC_FULL)
+					{
+						result.emplace_back(OperandSeparatorToken, ", ");
+						result.emplace_back(TextToken, " #");
+						snprintf(buf, sizeof(buf), "0x%" PRIx64, instr.operands[i].immediate);
+						result.emplace_back(IntegerToken, buf);
+					}
+					result.emplace_back(TextToken, "]");
+				}
+				tokenizeSuccess = true;
+				break;
+			case INDEXED_ELEMENT: /* eg: "p12.d[w15, #0xf]" */
+				result.emplace_back(RegisterToken, get_register_name(operand->reg[0]));
+				result.emplace_back(TextToken, get_arrspec_str_truncated(operand->arrSpec));
+				result.emplace_back(TextToken, "[");
+				result.emplace_back(RegisterToken, get_register_name(operand->reg[1]));
+				if (operand->immediate)
+				{
+					result.emplace_back(OperandSeparatorToken, ", ");
+					result.emplace_back(TextToken, "#");
+					snprintf(buf, sizeof(buf), "0x%" PRIx64, operand->immediate);
+					result.emplace_back(IntegerToken, buf);
+				}
+				result.emplace_back(TextToken, "]");
+				tokenizeSuccess = true;
+				break;
 			default:
 				LogError("operandClass %x\n", instr.operands[i].operandClass);
 				return false;
@@ -838,20 +908,6 @@ class Arm64Architecture : public Architecture
 			return "__autia";
 		case ARM64_INTRIN_AUTIB:
 			return "__autib";
-		case ARM64_INTRIN_AUTIB1716:
-			return "__autib1716";
-		case ARM64_INTRIN_AUTIBSP:
-			return "__autibsp";
-		case ARM64_INTRIN_AUTIBZ:
-			return "__autibz";
-		case ARM64_INTRIN_AUTDZA:
-			return "__autdza";
-		case ARM64_INTRIN_AUTDZB:
-			return "__autdzb";
-		case ARM64_INTRIN_AUTIZA:
-			return "__autiza";
-		case ARM64_INTRIN_AUTIZB:
-			return "__autizb";
 		case ARM64_INTRIN_ISB:
 			return "__isb";
 		case ARM64_INTRIN_WFE:
@@ -870,32 +926,12 @@ class Arm64Architecture : public Architecture
 			return "__pacda";
 		case ARM64_INTRIN_PACDB:
 			return "__pacdb";
-		case ARM64_INTRIN_PACDZA:
-			return "__pacdza";
-		case ARM64_INTRIN_PACDZB:
-			return "__pacdzb";
 		case ARM64_INTRIN_PACGA:
 			return "__pacga";
 		case ARM64_INTRIN_PACIA:
 			return "__pacia";
-		case ARM64_INTRIN_PACIA1716:
-			return "__pacia1716";
-		case ARM64_INTRIN_PACIASP:
-			return "__paciasp";
-		case ARM64_INTRIN_PACIAZ:
-			return "__paciaz";
-		case ARM64_INTRIN_PACIZA:
-			return "__paciza";
 		case ARM64_INTRIN_PACIB:
 			return "__pacib";
-		case ARM64_INTRIN_PACIB1716:
-			return "__pacib1716";
-		case ARM64_INTRIN_PACIBSP:
-			return "__pacibsp";
-		case ARM64_INTRIN_PACIBZ:
-			return "__pacibz";
-		case ARM64_INTRIN_PACIZB:
-			return "__pacizb";
 		case ARM64_INTRIN_PSBCSYNC:
 			return "SystemHintOp_PSB";
 		case ARM64_INTRIN_HINT_TSB:
@@ -922,8 +958,6 @@ class Arm64Architecture : public Architecture
 			return "__xpacd";
 		case ARM64_INTRIN_XPACI:
 			return "__xpaci";
-		case ARM64_INTRIN_XPACLRI:
-			return "__xpaclri";
 		case ARM64_INTRIN_ERET:
 			return "_eret";
 		case ARM64_INTRIN_CLZ:
@@ -950,18 +984,15 @@ class Arm64Architecture : public Architecture
 	{
 		vector<uint32_t> result = NeonGetAllIntrinsics();
 
-		vector<uint32_t> tmp = {ARM64_INTRIN_AUTDA, ARM64_INTRIN_AUTDB, ARM64_INTRIN_AUTDZA,
-		    ARM64_INTRIN_AUTDZB, ARM64_INTRIN_AUTIA, ARM64_INTRIN_AUTIB, ARM64_INTRIN_AUTIZA,
-		    ARM64_INTRIN_AUTIZB, ARM64_INTRIN_AUTIB1716, ARM64_INTRIN_AUTIBSP, ARM64_INTRIN_AUTIBZ,
+		vector<uint32_t> tmp = {
+			ARM64_INTRIN_AUTDA, ARM64_INTRIN_AUTDB, ARM64_INTRIN_AUTIA, ARM64_INTRIN_AUTIB,
 		    ARM64_INTRIN_DC, ARM64_INTRIN_DMB, ARM64_INTRIN_DSB, ARM64_INTRIN_ESB,
 		    ARM64_INTRIN_HINT_BTI, ARM64_INTRIN_HINT_CSDB, ARM64_INTRIN_HINT_DGH, ARM64_INTRIN_HINT_TSB,
 		    ARM64_INTRIN_ISB, ARM64_INTRIN_MRS, ARM64_INTRIN_MSR, ARM64_INTRIN_PACDA,
-		    ARM64_INTRIN_PACDB, ARM64_INTRIN_PACDZA, ARM64_INTRIN_PACDZB, ARM64_INTRIN_PACGA,
-		    ARM64_INTRIN_PACIA, ARM64_INTRIN_PACIA1716, ARM64_INTRIN_PACIASP, ARM64_INTRIN_PACIAZ,
-		    ARM64_INTRIN_PACIZA, ARM64_INTRIN_PACIB, ARM64_INTRIN_PACIB1716, ARM64_INTRIN_PACIBSP,
-		    ARM64_INTRIN_PACIBZ, ARM64_INTRIN_PACIZB, ARM64_INTRIN_PRFM, ARM64_INTRIN_PSBCSYNC,
+		    ARM64_INTRIN_PACDB, ARM64_INTRIN_PACGA, ARM64_INTRIN_PACIA, ARM64_INTRIN_PACIB,
+		    ARM64_INTRIN_PRFM, ARM64_INTRIN_PSBCSYNC,
 		    ARM64_INTRIN_SEV, ARM64_INTRIN_SEVL, ARM64_INTRIN_WFE, ARM64_INTRIN_WFI, ARM64_INTRIN_YIELD,
-		    ARM64_INTRIN_XPACD, ARM64_INTRIN_XPACI, ARM64_INTRIN_XPACLRI, ARM64_INTRIN_ERET,
+		    ARM64_INTRIN_XPACD, ARM64_INTRIN_XPACI, ARM64_INTRIN_ERET,
 		    ARM64_INTRIN_CLZ, ARM64_INTRIN_CLREX, ARM64_INTRIN_REV, ARM64_INTRIN_RBIT,
 		    ARM64_INTRIN_AESD, ARM64_INTRIN_AESE};
 
@@ -974,29 +1005,23 @@ class Arm64Architecture : public Architecture
 	{
 		switch (intrinsic)
 		{
-		case ARM64_INTRIN_AUTDA:      // reads <Xn|SP>
-		case ARM64_INTRIN_AUTDB:      // reads <Xn|SP>
-		case ARM64_INTRIN_AUTIA:      // reads <Xn|SP>
-		case ARM64_INTRIN_AUTIB:      // reads <Xn|SP>
-		case ARM64_INTRIN_AUTIB1716:  // reads x16
 		case ARM64_INTRIN_CLZ:        // reads <Xn>
 		case ARM64_INTRIN_DC:         // reads <Xt>
 		case ARM64_INTRIN_MSR:
 		case ARM64_INTRIN_MRS:
-		case ARM64_INTRIN_PACDA:      // reads <Xn>
-		case ARM64_INTRIN_PACDB:      // reads <Xn>
-		case ARM64_INTRIN_PACIA:      // reads <Xn>
-		case ARM64_INTRIN_PACIA1716:  // reads x16
-		case ARM64_INTRIN_PACIB:      // reads <Xn>
-		case ARM64_INTRIN_PACIB1716:  // reads x16
 		case ARM64_INTRIN_PRFM:
 		case ARM64_INTRIN_REV:   // reads <Xn>
 		case ARM64_INTRIN_RBIT:  // reads <Xn>
 			return {NameAndType(Type::IntegerType(8, false))};
-		case ARM64_INTRIN_AUTIBSP:  // reads x30, sp
-		case ARM64_INTRIN_PACGA:    // reads <Xn>, <Xm|SP>
-		case ARM64_INTRIN_PACIASP:  // reads x30, sp
-		case ARM64_INTRIN_PACIBSP:  // reads x30, sp
+		case ARM64_INTRIN_AUTDA:      // reads <Xd>, <Xn|SP>
+		case ARM64_INTRIN_AUTDB:      // reads <Xd>, <Xn|SP>
+		case ARM64_INTRIN_AUTIA:      // reads <Xd>, <Xn|SP>
+		case ARM64_INTRIN_AUTIB:      // reads <Xd>, <Xn|SP>
+		case ARM64_INTRIN_PACGA:      // reads <Xn>, <Xm|SP>
+		case ARM64_INTRIN_PACDA:      // reads <Xd>, <Xn>
+		case ARM64_INTRIN_PACDB:      // reads <Xd>, <Xn>
+		case ARM64_INTRIN_PACIA:      // reads <Xd>, <Xn>
+		case ARM64_INTRIN_PACIB:      // reads <Xd>, <Xn>
 			return {NameAndType(Type::IntegerType(8, false)), NameAndType(Type::IntegerType(8, false))};
 		case ARM64_INTRIN_AESD:
 		case ARM64_INTRIN_AESE:
@@ -1018,32 +1043,14 @@ class Arm64Architecture : public Architecture
 		case ARM64_INTRIN_AUTDB:      // writes <Xd>
 		case ARM64_INTRIN_AUTIA:      // writes <Xd>
 		case ARM64_INTRIN_AUTIB:      // writes <Xd>
-		case ARM64_INTRIN_AUTIB1716:  // writes x17
-		case ARM64_INTRIN_AUTIBSP:    // writes x30
-		case ARM64_INTRIN_AUTIBZ:     // writes x30
-		case ARM64_INTRIN_AUTDZA:     // writes <Xd>
-		case ARM64_INTRIN_AUTDZB:     // writes <Xd>
-		case ARM64_INTRIN_AUTIZA:     // writes <Xd>
-		case ARM64_INTRIN_AUTIZB:     // writes <Xd>
 		case ARM64_INTRIN_MRS:
 		case ARM64_INTRIN_PACDA:      // writes <Xd>
 		case ARM64_INTRIN_PACDB:      // writes <Xd>
-		case ARM64_INTRIN_PACDZA:     // writes <Xd>
-		case ARM64_INTRIN_PACDZB:     // writes <Xd>
 		case ARM64_INTRIN_PACIA:      // writes <Xd>
 		case ARM64_INTRIN_PACGA:      // writes <Xd>
-		case ARM64_INTRIN_PACIA1716:  // writes x17
-		case ARM64_INTRIN_PACIASP:    // writes x30
-		case ARM64_INTRIN_PACIAZ:     // writes x30
-		case ARM64_INTRIN_PACIB1716:  // writes x17
 		case ARM64_INTRIN_PACIB:      // writes <Xd>
-		case ARM64_INTRIN_PACIBSP:    // writes x30
-		case ARM64_INTRIN_PACIBZ:     // writes x30
-		case ARM64_INTRIN_PACIZA:     // writes <Xd>
-		case ARM64_INTRIN_PACIZB:     // writes <Xd>
 		case ARM64_INTRIN_XPACD:      // writes <Xd>
 		case ARM64_INTRIN_XPACI:      // writes <Xd>
-		case ARM64_INTRIN_XPACLRI:    // writes x30
 		case ARM64_INTRIN_CLZ:        // writes <Xd>
 		case ARM64_INTRIN_REV:        // writes <Xd>
 		case ARM64_INTRIN_RBIT:       // writes <Xd>
@@ -1210,6 +1217,226 @@ class Arm64Architecture : public Architecture
 		}
 	}
 
+	virtual vector<uint32_t> GetAllSemanticFlagClasses() override
+	{
+		return vector<uint32_t> {IL_FLAG_CLASS_INT, IL_FLAG_CLASS_FLOAT};
+	}
+
+	virtual string GetSemanticFlagClassName(uint32_t semClass) override
+	{
+		switch (semClass) {
+			case IL_FLAG_CLASS_INT:
+				return "int";
+			case IL_FLAG_CLASS_FLOAT:
+				return "float";
+			default:
+				return "";
+		}
+	}
+
+	virtual uint32_t GetSemanticClassForFlagWriteType(uint32_t writeType) override
+	{
+		switch (writeType) {
+		case IL_FLAG_WRITE_ALL_FLOAT:
+			return IL_FLAG_CLASS_FLOAT;
+		case IL_FLAG_WRITE_ALL:
+		default:
+			return IL_FLAG_CLASS_INT;
+		}
+	}
+
+	virtual vector<uint32_t> GetAllSemanticFlagGroups() override
+	{
+
+		return vector<uint32_t> {
+			IL_FLAG_GROUP_EQ, IL_FLAG_GROUP_NE, IL_FLAG_GROUP_CS, IL_FLAG_GROUP_CC,
+			IL_FLAG_GROUP_MI, IL_FLAG_GROUP_PL, IL_FLAG_GROUP_VS, IL_FLAG_GROUP_VC,
+			IL_FLAG_GROUP_HI, IL_FLAG_GROUP_LS, IL_FLAG_GROUP_GE, IL_FLAG_GROUP_LT,
+			IL_FLAG_GROUP_GT, IL_FLAG_GROUP_LE};
+	}
+
+	virtual string GetSemanticFlagGroupName(uint32_t semGroup) override
+	{
+		switch (semGroup)
+		{
+		case IL_FLAG_GROUP_EQ:
+			return "eq";
+		case IL_FLAG_GROUP_NE:
+			return "ne";
+		case IL_FLAG_GROUP_CS:
+			return "cs";
+		case IL_FLAG_GROUP_CC:
+			return "cc";
+		case IL_FLAG_GROUP_MI:
+			return "mi";
+		case IL_FLAG_GROUP_PL:
+			return "pl";
+		case IL_FLAG_GROUP_VS:
+			return "vs";
+		case IL_FLAG_GROUP_VC:
+			return "vc";
+		case IL_FLAG_GROUP_HI:
+			return "hi";
+		case IL_FLAG_GROUP_LS:
+			return "ls";
+		case IL_FLAG_GROUP_GE:
+			return "ge";
+		case IL_FLAG_GROUP_LT:
+			return "lt";
+		case IL_FLAG_GROUP_GT:
+			return "gt";
+		case IL_FLAG_GROUP_LE:
+			return "le";
+		default:
+			return "";
+		}
+	}
+
+	virtual vector<uint32_t> GetFlagsRequiredForSemanticFlagGroup(uint32_t semGroup) override
+	{
+		switch (semGroup)
+		{
+		case IL_FLAG_GROUP_EQ:
+		case IL_FLAG_GROUP_NE:
+			return vector<uint32_t> {IL_FLAG_Z};
+		case IL_FLAG_GROUP_CS:
+		case IL_FLAG_GROUP_CC:
+			return vector<uint32_t> {IL_FLAG_C};
+		case IL_FLAG_GROUP_MI:
+		case IL_FLAG_GROUP_PL:
+			return vector<uint32_t> {IL_FLAG_N};
+		case IL_FLAG_GROUP_VS:
+		case IL_FLAG_GROUP_VC:
+			return vector<uint32_t> {IL_FLAG_V};
+		case IL_FLAG_GROUP_HI:
+		case IL_FLAG_GROUP_LS:
+			return vector<uint32_t> {IL_FLAG_C, IL_FLAG_Z};
+		case IL_FLAG_GROUP_GE:
+		case IL_FLAG_GROUP_LT:
+			return vector<uint32_t> {IL_FLAG_N, IL_FLAG_V};
+		case IL_FLAG_GROUP_GT:
+		case IL_FLAG_GROUP_LE:
+			return vector<uint32_t> {IL_FLAG_Z, IL_FLAG_N, IL_FLAG_V};
+		default:
+			return vector<uint32_t>();
+		}
+	}
+
+	virtual map<uint32_t, BNLowLevelILFlagCondition> GetFlagConditionsForSemanticFlagGroup(uint32_t semGroup) override
+	{
+		switch (semGroup) {
+		case IL_FLAG_GROUP_EQ:
+			return map<uint32_t, BNLowLevelILFlagCondition> {
+				{IL_FLAG_CLASS_INT, LLFC_E},
+				{IL_FLAG_CLASS_FLOAT, LLFC_FE},
+			};
+		case IL_FLAG_GROUP_NE:
+			return map<uint32_t, BNLowLevelILFlagCondition> {
+				{IL_FLAG_CLASS_INT, LLFC_NE},
+				{IL_FLAG_CLASS_FLOAT, LLFC_FNE},
+			};
+		case IL_FLAG_GROUP_CS:
+			return map<uint32_t, BNLowLevelILFlagCondition> {
+				{IL_FLAG_CLASS_INT, LLFC_UGE},
+				{IL_FLAG_CLASS_FLOAT, LLFC_FGE},
+			};
+		case IL_FLAG_GROUP_CC:
+			return map<uint32_t, BNLowLevelILFlagCondition> {
+				{IL_FLAG_CLASS_INT, LLFC_ULT},
+				{IL_FLAG_CLASS_FLOAT, LLFC_FLT},
+			};
+		case IL_FLAG_GROUP_MI:
+			return map<uint32_t, BNLowLevelILFlagCondition> {
+				{IL_FLAG_CLASS_INT, LLFC_NEG},
+				{IL_FLAG_CLASS_FLOAT, LLFC_FLT},
+			};
+		case IL_FLAG_GROUP_PL:
+			return map<uint32_t, BNLowLevelILFlagCondition> {
+				{IL_FLAG_CLASS_INT, LLFC_POS},
+				{IL_FLAG_CLASS_FLOAT, LLFC_FGE},
+			};
+		case IL_FLAG_GROUP_VS:
+			return map<uint32_t, BNLowLevelILFlagCondition> {
+				{IL_FLAG_CLASS_INT, LLFC_O},
+				{IL_FLAG_CLASS_FLOAT, LLFC_FO},
+			};
+		case IL_FLAG_GROUP_VC:
+			return map<uint32_t, BNLowLevelILFlagCondition> {
+				{IL_FLAG_CLASS_INT, LLFC_NO},
+				{IL_FLAG_CLASS_FLOAT, LLFC_FUO},
+			};
+		case IL_FLAG_GROUP_HI:
+			return map<uint32_t, BNLowLevelILFlagCondition> {
+				{IL_FLAG_CLASS_INT, LLFC_UGT},
+				{IL_FLAG_CLASS_FLOAT, LLFC_FGT},
+			};
+		case IL_FLAG_GROUP_LS:
+			return map<uint32_t, BNLowLevelILFlagCondition> {
+				{IL_FLAG_CLASS_INT, LLFC_ULE},
+				{IL_FLAG_CLASS_FLOAT, LLFC_FLE},
+			};
+		case IL_FLAG_GROUP_GE:
+			return map<uint32_t, BNLowLevelILFlagCondition> {
+				{IL_FLAG_CLASS_INT, LLFC_SGE},
+				{IL_FLAG_CLASS_FLOAT, LLFC_FGE},
+			};
+		case IL_FLAG_GROUP_LT:
+			return map<uint32_t, BNLowLevelILFlagCondition> {
+				{IL_FLAG_CLASS_INT, LLFC_SLT},
+				{IL_FLAG_CLASS_FLOAT, LLFC_FLT},
+			};
+		case IL_FLAG_GROUP_GT:
+			return map<uint32_t, BNLowLevelILFlagCondition> {
+				{IL_FLAG_CLASS_INT, LLFC_SGT},
+				{IL_FLAG_CLASS_FLOAT, LLFC_FGT},
+			};
+		case IL_FLAG_GROUP_LE:
+			return map<uint32_t, BNLowLevelILFlagCondition> {
+				{IL_FLAG_CLASS_INT, LLFC_SLE},
+				{IL_FLAG_CLASS_FLOAT, LLFC_FLE},
+			};
+		default:
+			return map<uint32_t, BNLowLevelILFlagCondition>();
+		}
+	}
+
+	virtual size_t GetSemanticFlagGroupLowLevelIL(uint32_t semGroup, LowLevelILFunction& il) override
+	{
+		switch (semGroup)
+		{
+		case IL_FLAG_GROUP_EQ:
+			return GetFlagConditionLowLevelIL(LLFC_E, IL_FLAG_CLASS_INT, il);
+		case IL_FLAG_GROUP_NE:
+			return GetFlagConditionLowLevelIL(LLFC_NE, IL_FLAG_CLASS_INT, il);
+		case IL_FLAG_GROUP_CS:
+			return GetFlagConditionLowLevelIL(LLFC_UGE, IL_FLAG_CLASS_INT, il);
+		case IL_FLAG_GROUP_CC:
+			return GetFlagConditionLowLevelIL(LLFC_ULT, IL_FLAG_CLASS_INT, il);
+		case IL_FLAG_GROUP_MI:
+			return GetFlagConditionLowLevelIL(LLFC_NEG, IL_FLAG_CLASS_INT, il);
+		case IL_FLAG_GROUP_PL:
+			return GetFlagConditionLowLevelIL(LLFC_POS, IL_FLAG_CLASS_INT, il);
+		case IL_FLAG_GROUP_VS:
+			return GetFlagConditionLowLevelIL(LLFC_O, IL_FLAG_CLASS_INT, il);
+		case IL_FLAG_GROUP_VC:
+			return GetFlagConditionLowLevelIL(LLFC_NO, IL_FLAG_CLASS_INT, il);
+		case IL_FLAG_GROUP_HI:
+			return GetFlagConditionLowLevelIL(LLFC_UGT, IL_FLAG_CLASS_INT, il);
+		case IL_FLAG_GROUP_LS:
+			return GetFlagConditionLowLevelIL(LLFC_ULE, IL_FLAG_CLASS_INT, il);
+		case IL_FLAG_GROUP_GE:
+			return GetFlagConditionLowLevelIL(LLFC_SGE, IL_FLAG_CLASS_INT, il);
+		case IL_FLAG_GROUP_LT:
+			return GetFlagConditionLowLevelIL(LLFC_SLT, IL_FLAG_CLASS_INT, il);
+		case IL_FLAG_GROUP_GT:
+			return GetFlagConditionLowLevelIL(LLFC_SGT, IL_FLAG_CLASS_INT, il);
+		case IL_FLAG_GROUP_LE:
+			return GetFlagConditionLowLevelIL(LLFC_SLE, IL_FLAG_CLASS_INT, il);
+		default:
+			return il.Unimplemented();
+		}
+	}
+
 
 	/* flag roles */
 
@@ -1235,7 +1462,7 @@ class Arm64Architecture : public Architecture
 
 	virtual vector<uint32_t> GetAllFlagWriteTypes() override
 	{
-		return vector<uint32_t> {IL_FLAGWRITE_ALL};
+		return vector<uint32_t> {IL_FLAG_WRITE_ALL, IL_FLAG_WRITE_ALL_FLOAT};
 	}
 
 
@@ -1243,8 +1470,10 @@ class Arm64Architecture : public Architecture
 	{
 		switch (flags)
 		{
-		case IL_FLAGWRITE_ALL:
+		case IL_FLAG_WRITE_ALL:
 			return "*";
+		case IL_FLAG_WRITE_ALL_FLOAT:
+			return "f*";
 		default:
 			return "";
 		}
@@ -1255,44 +1484,11 @@ class Arm64Architecture : public Architecture
 	{
 		switch (flags)
 		{
-		case IL_FLAGWRITE_ALL:
+		case IL_FLAG_WRITE_ALL:
+		case IL_FLAG_WRITE_ALL_FLOAT:
 			return vector<uint32_t> {IL_FLAG_N, IL_FLAG_Z, IL_FLAG_C, IL_FLAG_V};
 		default:
 			return vector<uint32_t> {};
-		}
-	}
-
-
-	/* connect flags to conditional statements */
-
-	virtual vector<uint32_t> GetFlagsRequiredForFlagCondition(
-	    BNLowLevelILFlagCondition cond, uint32_t) override
-	{
-		switch (cond)
-		{
-		case LLFC_E:
-		case LLFC_NE:
-			return vector<uint32_t> {IL_FLAG_Z};
-		case LLFC_SLT:
-		case LLFC_SGE:
-			return vector<uint32_t> {IL_FLAG_N, IL_FLAG_V};
-		case LLFC_ULT:
-		case LLFC_UGE:
-			return vector<uint32_t> {IL_FLAG_C};
-		case LLFC_SLE:
-		case LLFC_SGT:
-			return vector<uint32_t> {IL_FLAG_Z, IL_FLAG_N, IL_FLAG_V};
-		case LLFC_ULE:
-		case LLFC_UGT:
-			return vector<uint32_t> {IL_FLAG_C, IL_FLAG_Z};
-		case LLFC_NEG:
-		case LLFC_POS:
-			return vector<uint32_t> {IL_FLAG_N};
-		case LLFC_O:
-		case LLFC_NO:
-			return vector<uint32_t> {IL_FLAG_V};
-		default:
-			return vector<uint32_t>();
 		}
 	}
 
@@ -1305,20 +1501,6 @@ class Arm64Architecture : public Architecture
 	{
 		switch (op)
 		{
-		case LLIL_AND:
-			switch (flag)
-			{
-			case IL_FLAG_V:
-				return il.CompareNotEqual(0,
-				    il.Xor(0,
-				        il.CompareSignedLessThan(size,
-				            il.GetExprForRegisterOrConstantOperation(op, size, operands, operandCount),
-				            il.Const(size, 0)),
-				        il.Flag(IL_FLAG_V)),
-				    il.Const(0, 0));
-			case IL_FLAG_C:
-				return il.Const(0, 0);
-			}
 		case LLIL_SBB:
 			switch (flag)
 			{
@@ -1367,12 +1549,12 @@ class Arm64Architecture : public Architecture
 			REG_X0,   REG_X1,  REG_X2,  REG_X3,   REG_X4,  REG_X5,  REG_X6,  REG_X7,
 			REG_X8,   REG_X9,  REG_X10, REG_X11,  REG_X12, REG_X13, REG_X14, REG_X15,
 			REG_X16,  REG_X17, REG_X18, REG_X19,  REG_X20, REG_X21, REG_X22, REG_X23,
-			REG_X24,  REG_X25, REG_X26, REG_X27,  REG_X28, REG_X29, REG_X30, REG_SP,  REG_XZR,
+			REG_X24,  REG_X25, REG_X26, REG_X27,  REG_X28, REG_X29, REG_X30, REG_SP,
 			// Vector
-			REG_Q0,   REG_Q1,  REG_Q2,  REG_Q3,   REG_Q4,  REG_Q5,  REG_Q6,  REG_Q7,
-			REG_Q8,   REG_Q9,  REG_Q10, REG_Q11,  REG_Q12, REG_Q13, REG_Q14, REG_Q15,
-			REG_Q16,  REG_Q17, REG_Q18, REG_Q19,  REG_Q20, REG_Q21, REG_Q22, REG_Q23,
-			REG_Q24,  REG_Q25, REG_Q26, REG_Q27,  REG_Q28, REG_Q29, REG_Q30, REG_Q31,
+			REG_V0,   REG_V1,  REG_V2,  REG_V3,   REG_V4,  REG_V5,  REG_V6,  REG_V7,
+			REG_V8,   REG_V9,  REG_V10, REG_V11,  REG_V12, REG_V13, REG_V14, REG_V15,
+			REG_V16,  REG_V17, REG_V18, REG_V19,  REG_V20, REG_V21, REG_V22, REG_V23,
+			REG_V24,  REG_V25, REG_V26, REG_V27,  REG_V28, REG_V29, REG_V30, REG_V31,
 			// SVE
 			REG_P0,   REG_P1,  REG_P2,  REG_P3,   REG_P4,  REG_P5,  REG_P6,  REG_P7,
 			REG_P8,   REG_P9,  REG_P10,  REG_P11,   REG_P12,  REG_P13,  REG_P14,  REG_P15,
@@ -1389,11 +1571,11 @@ class Arm64Architecture : public Architecture
 			REG_W0,  REG_W1,  REG_W2,  REG_W3,  REG_W4,  REG_W5,  REG_W6,  REG_W7,
 			REG_W8,  REG_W9,  REG_W10, REG_W11, REG_W12, REG_W13, REG_W14, REG_W15,
 			REG_W16, REG_W17, REG_W18, REG_W19, REG_W20, REG_W21, REG_W22, REG_W23,
-			REG_W24, REG_W25, REG_W26, REG_W27, REG_W28, REG_W29, REG_W30, REG_WSP, REG_WZR,
+			REG_W24, REG_W25, REG_W26, REG_W27, REG_W28, REG_W29, REG_W30, REG_WSP,
 			REG_X0,  REG_X1,  REG_X2,  REG_X3,  REG_X4,  REG_X5,  REG_X6,  REG_X7,
 			REG_X8,  REG_X9,  REG_X10, REG_X11, REG_X12, REG_X13, REG_X14, REG_X15,
 			REG_X16, REG_X17, REG_X18, REG_X19, REG_X20, REG_X21, REG_X22, REG_X23,
-			REG_X24, REG_X25, REG_X26, REG_X27, REG_X28, REG_X29, REG_X30, REG_SP,  REG_XZR,
+			REG_X24, REG_X25, REG_X26, REG_X27, REG_X28, REG_X29, REG_X30, REG_SP,
 			REG_V0,  REG_V1,  REG_V2,  REG_V3,  REG_V4,  REG_V5,  REG_V6,  REG_V7,
 			REG_V8,  REG_V9,  REG_V10, REG_V11, REG_V12, REG_V13, REG_V14, REG_V15,
 			REG_V16, REG_V17, REG_V18, REG_V19, REG_V20, REG_V21, REG_V22, REG_V23,
@@ -1755,7 +1937,6 @@ class Arm64Architecture : public Architecture
 			case REG_W29:
 			case REG_W30:
 			case REG_WSP:
-			case REG_WZR:
 					return RegisterInfo(REG_X0 + (reg-REG_W0), 0, 4, true);
 			case REG_X0:
 			case REG_X1:
@@ -1789,7 +1970,6 @@ class Arm64Architecture : public Architecture
 			case REG_X29:
 			case REG_X30:
 			case REG_SP:
-			case REG_XZR:
 				return RegisterInfo(reg, 0, 8);
 			case REG_V0:
 			case REG_V1:
@@ -2225,6 +2405,8 @@ class Arm64ImportedFunctionRecognizer : public FunctionRecognizer
 
 	bool RecognizeMachoPLTEntries(BinaryView* data, Function* func, LowLevelILFunction* il)
 	{
+		DataVariable target;
+
 		if ((il->GetInstructionCount() == 2) || (il->GetInstructionCount() == 3))
 		{
 			// 0: nop OR x16 = symbol@PLT
@@ -2283,7 +2465,19 @@ class Arm64ImportedFunctionRecognizer : public FunctionRecognizer
 			if (jumpOperand.GetSourceRegister<LLIL_REG>() != targetReg)
 				return false;
 
-			data->DefineImportedFunction(sym, func);
+			data->GetDataVariableAtAddress(loadAddrConstant.value, target);
+
+			Ref<Type> funcType = nullptr;
+			if (target.type && target.type->GetClass() == PointerTypeClass &&
+					target.type.GetConfidence() >= BN_MINIMUM_CONFIDENCE)
+			{
+				target.type = target.type->GetChildType();
+				if (target.type && target.type->GetClass() == FunctionTypeClass &&
+						target.type.GetConfidence() >= BN_MINIMUM_CONFIDENCE)
+					funcType = target.type.GetValue();
+			}
+
+			data->DefineImportedFunction(sym, func, funcType);
 			return true;
 		}
 		else if (il->GetInstructionCount() == 4)
@@ -2362,7 +2556,19 @@ class Arm64ImportedFunctionRecognizer : public FunctionRecognizer
 			if (jumpOperand.GetSourceRegister<LLIL_REG>() != targetReg)
 				return false;
 
-			data->DefineImportedFunction(sym, func);
+			data->GetDataVariableAtAddress(loadAddrConstant.value, target);
+
+			Ref<Type> funcType = nullptr;
+			if (target.type && target.type->GetClass() == PointerTypeClass &&
+					target.type.GetConfidence() >= BN_MINIMUM_CONFIDENCE)
+			{
+				target.type = target.type->GetChildType();
+				if (target.type && target.type->GetClass() == FunctionTypeClass &&
+						target.type.GetConfidence() >= BN_MINIMUM_CONFIDENCE)
+					funcType = target.type.GetValue();
+			}
+
+			data->DefineImportedFunction(sym, func, funcType);
 			return true;
 		}
 
@@ -2402,7 +2608,7 @@ class Arm64CallingConvention : public CallingConvention
 
 	virtual vector<uint32_t> GetFloatArgumentRegisters() override
 	{
-		return vector<uint32_t> {REG_Q0, REG_Q1, REG_Q2, REG_Q3, REG_Q4, REG_Q5, REG_Q6, REG_Q7};
+		return vector<uint32_t> {REG_V0, REG_V1, REG_V2, REG_V3, REG_V4, REG_V5, REG_V6, REG_V7};
 	}
 
 
@@ -2410,9 +2616,9 @@ class Arm64CallingConvention : public CallingConvention
 	{
 		return vector<uint32_t> {REG_X0, REG_X1, REG_X2, REG_X3, REG_X4, REG_X5, REG_X6, REG_X7, REG_X8,
 		    REG_X9, REG_X10, REG_X11, REG_X12, REG_X13, REG_X14, REG_X15, REG_X16, REG_X17, REG_X18,
-		    REG_X30, REG_Q0, REG_Q1, REG_Q2, REG_Q3, REG_Q4, REG_Q5, REG_Q6, REG_Q7, REG_Q16, REG_Q17,
-		    REG_Q18, REG_Q19, REG_Q20, REG_Q21, REG_Q22, REG_Q23, REG_Q24, REG_Q25, REG_Q26, REG_Q27,
-		    REG_Q28, REG_Q29, REG_Q30, REG_Q31};
+		    REG_X30, REG_V0, REG_V1, REG_V2, REG_V3, REG_V4, REG_V5, REG_V6, REG_V7, REG_V16, REG_V17,
+		    REG_V18, REG_V19, REG_V20, REG_V21, REG_V22, REG_V23, REG_V24, REG_V25, REG_V26, REG_V27,
+		    REG_V28, REG_V29, REG_V30, REG_V31};
 	}
 
 
@@ -2426,7 +2632,7 @@ class Arm64CallingConvention : public CallingConvention
 	virtual uint32_t GetIntegerReturnValueRegister() override { return REG_X0; }
 
 
-	virtual uint32_t GetFloatReturnValueRegister() override { return REG_Q0; }
+	virtual uint32_t GetFloatReturnValueRegister() override { return REG_V0; }
 };
 
 
@@ -2725,6 +2931,14 @@ struct LDST_REG_UNSIGNED_IMM{
 	uint32_t size:2;
 };
 
+struct MOV_WIDE_IMM{
+    uint32_t Rd:5;
+    uint32_t imm:16;
+    uint32_t shift:2;
+    uint32_t opcode:6;
+    uint32_t variant:3;
+};
+
 class Arm64ElfRelocationHandler : public RelocationHandler
 {
  public:
@@ -2855,11 +3069,31 @@ class Arm64ElfRelocationHandler : public RelocationHandler
 		}
 		case R_AARCH64_MOVW_UABS_G0:
 		case R_AARCH64_MOVW_UABS_G0_NC:
+		{
+			MOV_WIDE_IMM* decode = (MOV_WIDE_IMM*)dest;
+			decode->imm = (target + info.addend);
+			break;
+		}
 		case R_AARCH64_MOVW_UABS_G1:
 		case R_AARCH64_MOVW_UABS_G1_NC:
+		{
+			MOV_WIDE_IMM* decode = (MOV_WIDE_IMM*)dest;
+			decode->imm = (target + info.addend)>>16;
+			break;
+		}
 		case R_AARCH64_MOVW_UABS_G2:
 		case R_AARCH64_MOVW_UABS_G2_NC:
+		{
+			MOV_WIDE_IMM* decode = (MOV_WIDE_IMM*)dest;
+			decode->imm = (target + info.addend)>>32;
+			break;
+		}
 		case R_AARCH64_MOVW_UABS_G3:
+		{
+			MOV_WIDE_IMM* decode = (MOV_WIDE_IMM*)dest;
+			decode->imm = (target + info.addend)>>48;
+			break;
+		}
 		case R_AARCH64_MOVW_SABS_G0:
 		case R_AARCH64_MOVW_SABS_G1:
 		case R_AARCH64_MOVW_SABS_G2:
@@ -2931,6 +3165,15 @@ class Arm64ElfRelocationHandler : public RelocationHandler
 			case R_AARCH64_CALL26:
 			case R_AARCH64_JUMP26:
 				reloc.pcRelative = true;
+				reloc.size = 4;
+				break;
+			case R_AARCH64_MOVW_UABS_G0:
+			case R_AARCH64_MOVW_UABS_G0_NC:
+			case R_AARCH64_MOVW_UABS_G1:
+			case R_AARCH64_MOVW_UABS_G1_NC:
+			case R_AARCH64_MOVW_UABS_G2:
+			case R_AARCH64_MOVW_UABS_G2_NC:
+			case R_AARCH64_MOVW_UABS_G3:
 				reloc.size = 4;
 				break;
 			case R_AARCH64_ABS32:
@@ -3094,6 +3337,20 @@ public:
 			decode->imm = (inst.operands[0].immediate + target - reloc->GetAddress()) >> 2;
 			break;
 		}
+		case PE_IMAGE_REL_ARM64_SECTION:
+			// TODO: test this implementation, but for now, just don't warn about it
+			dest16[0] = info.sectionIndex + 1;
+			break;
+		case PE_IMAGE_REL_ARM64_SECREL:
+		{
+			// TODO: test this implementation, but for now, just don't warn about it
+			auto sections = view->GetSectionsAt(info.target);
+			if (sections.size() > 0)
+			{
+				dest32[0] = info.target - sections[0]->GetStart();
+			}
+			break;
+		}
 		case PE_IMAGE_REL_ARM64_ADDR32NB:
 		case PE_IMAGE_REL_ARM64_ADDR64:
 		case IMAGE_REL_ARM64_REL32:
@@ -3149,15 +3406,25 @@ public:
 				reloc.baseRelative = false;
 				reloc.size = 4;
 				break;
+			case PE_IMAGE_REL_ARM64_SECTION:
+				// The 16-bit section index of the section that contains the target. This is used to support debugging information.
+				reloc.baseRelative = false;
+				reloc.size = 2;
+				reloc.addend = 0;
+				break;
+			case PE_IMAGE_REL_ARM64_SECREL:
+				// The 32-bit offset of the target from the beginning of its section. This is used to support debugging information and static thread local storage.				reloc.baseRelative = false;
+				reloc.baseRelative = false;
+				reloc.size = 4;
+				reloc.addend = 0;
+				break;
 			case PE_IMAGE_REL_ARM64_SECREL_LOW12A:
 				// TODO
 			case PE_IMAGE_REL_ARM64_SECREL_HIGH12A:
 				// TODO
 			case PE_IMAGE_REL_ARM64_SECREL_LOW12L:
 				// TODO
-			case PE_IMAGE_REL_ARM64_SECREL:
 			case PE_IMAGE_REL_ARM64_TOKEN:
-			case PE_IMAGE_REL_ARM64_SECTION:
 			default:
 				reloc.type = UnhandledRelocation;
 				relocTypes.insert(reloc.nativeType);
@@ -3215,6 +3482,7 @@ extern "C"
 		// Register the architectures with the binary format parsers so that they know when to use
 		// these architectures for disassembling an executable file
 		BinaryViewType::RegisterArchitecture("Mach-O", 0x0100000c, LittleEndian, arm64);
+		BinaryViewType::RegisterArchitecture("Mach-O", 0x0200000c, LittleEndian, arm64);
 		BinaryViewType::RegisterArchitecture("ELF", 0xb7, LittleEndian, arm64);
 		BinaryViewType::RegisterArchitecture("ELF", 0xb7, BigEndian, arm64);
 		BinaryViewType::RegisterArchitecture("COFF", 0xaa64, LittleEndian, arm64);
