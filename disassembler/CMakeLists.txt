@@ -46,8 +46,9 @@ endforeach()
 
 # BN_ARM64_DISASM_HDR added for Xcode project generation
 add_library(bn-arm64-disasm ${BN_ARM64_DISASM_SRC} ${BN_ARM64_DISASM_HDR})
+target_include_directories(bn-arm64-disasm PUBLIC include)
 
 if (NOT CMAKE_CROSSCOMPILING)
-add_executable(bn-arm64-disasm-test test.c)
-target_link_libraries(bn-arm64-disasm-test bn-arm64-disasm)
+    add_executable(bn-arm64-disasm-test test.c)
+    target_link_libraries(bn-arm64-disasm-test bn-arm64-disasm)
 endif()
