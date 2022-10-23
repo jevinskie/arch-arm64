@@ -10,6 +10,11 @@ if (BN_ARM64_DISASM_IS_STANDALONE)
     project(bn-arm64-disasm C)
 endif()
 
+# Sanitizer options
+# add_compile_options(-O3)
+# add_compile_options(-fsanitize=address)
+# add_link_options(-fsanitize=address)
+
 
 set(BN_ARM64_DISASM_SRC
     decode.c
@@ -51,4 +56,7 @@ target_include_directories(bn-arm64-disasm PUBLIC include)
 if (NOT CMAKE_CROSSCOMPILING)
     add_executable(bn-arm64-disasm-test test.c)
     target_link_libraries(bn-arm64-disasm-test bn-arm64-disasm)
+
+    add_executable(bn-arm64-disasm-brute brute.c)
+    target_link_libraries(bn-arm64-disasm-brute bn-arm64-disasm)
 endif()
