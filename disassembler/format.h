@@ -9,7 +9,14 @@
 #include "operations.h"
 #include "regs.h"
 #include "sysregs.h"
+#if __has_include("sysregs_fmt.h")
 #include "sysregs_fmt.h"
+#else
+static inline const char *get_system_register_name(SystemReg reg) {
+	(void)reg;
+	return "";
+}
+#endif
 
 //-----------------------------------------------------------------------------
 // disassembly function prototypes, return values

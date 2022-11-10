@@ -7,7 +7,9 @@
 #include "format.h"
 #include "regs.h"
 #include "pcode.h"
+#if __has_include("sysregs_fmt.h")
 #include "sysregs_fmt.h"
+#endif
 
 const char *get_arrspec_str(ArrangementSpec arrspec)
 {
