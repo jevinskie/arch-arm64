@@ -539,7 +539,7 @@ class Arm64Architecture : public Architecture
 		/* only use index if this is isolated REG (not, for example, MULTIREG */
 		if (operand->operandClass == REG && operand->laneUsed)
 		{
-			sprintf(buf, "%u", operand->lane);
+			snprintf(buf, sizeof(buf), "%u", operand->lane);
 			result.emplace_back(TextToken, "[");
 			result.emplace_back(IntegerToken, buf);
 			result.emplace_back(TextToken, "]");
@@ -1212,7 +1212,7 @@ class Arm64Architecture : public Architecture
 		case IL_FLAG_V:
 			return "v";
 		default:
-			sprintf(result, "flag%" PRIu32, flag);
+			snprintf(result, sizeof(result), "flag%" PRIu32, flag);
 			return result;
 		}
 	}
@@ -2988,7 +2988,7 @@ class Arm64ElfRelocationHandler : public RelocationHandler
 		{
 			ADD_SUB_IMM* decode = (ADD_SUB_IMM*)dest;
 			aarch64_decompose(dest32[0], &inst, reloc->GetAddress());
-			decode->imm = inst.operands[2].immediate + target;
+			decode->imm = target + info.addend;
 			break;
 		}
 		case R_AARCH64_CALL26:
@@ -2996,7 +2996,7 @@ class Arm64ElfRelocationHandler : public RelocationHandler
 		{
 			UNCONDITIONAL_BRANCH* decode = (UNCONDITIONAL_BRANCH*)dest;
 			aarch64_decompose(dest32[0], &inst, 0);
-			decode->imm = (inst.operands[0].immediate + target - reloc->GetAddress()) >> 2;
+			decode->imm = (target + info.addend - reloc->GetAddress()) >> 2;
 			break;
 		}
 		case R_AARCH64_ABS16:
@@ -3115,8 +3115,7 @@ class Arm64ElfRelocationHandler : public RelocationHandler
 		return true;
 	}
 
-	virtual bool GetRelocationInfo(
-	    Ref<BinaryView> view, Ref<Architecture> arch, vector<BNRelocationInfo>& result) override
+	virtual bool GetRelocationInfo(Ref<BinaryView> view, Ref<Architecture> arch, vector<BNRelocationInfo>& result) override
 	{
 		(void)view;
 		(void)arch;
@@ -3167,6 +3166,10 @@ class Arm64ElfRelocationHandler : public RelocationHandler
 				reloc.pcRelative = true;
 				reloc.size = 4;
 				break;
+			case R_AARCH64_PREL64:
+				reloc.pcRelative = true;
+				reloc.size = 8;
+				break;
 			case R_AARCH64_MOVW_UABS_G0:
 			case R_AARCH64_MOVW_UABS_G0_NC:
 			case R_AARCH64_MOVW_UABS_G1:
@@ -3207,8 +3210,7 @@ class Arm64ElfRelocationHandler : public RelocationHandler
 			}
 		}
 		for (auto& reloc : relocTypes)
-			LogWarn("Unsupported ELF relocation type: %s",
-			    GetRelocationString((ElfArm64RelocationType)reloc));
+			LogWarn("Unsupported ELF relocation type: %s", GetRelocationString((ElfArm64RelocationType)reloc));
 		return true;
 	}
 
